@@ -1,0 +1,376 @@
+---
+title: "Human Activity Recogniton Using Smartphones"
+author: "Rey"
+date: '2022-06-07'
+output: html_document
+---
+```{r, message=FALSE, warning=FALSE, include=FALSE}
+library(dplyr)
+library(ggplot2)
+library(e1071)       
+library(caret)       
+library(partykit)    
+library(MASS)
+library(randomForest)
+library(car)
+library(FactoMineR)
+library(recipes)
+library(inspectdf) 
+library(tidymodels) 
+```
+
+# 1. Description of experiment
+
+The experiments have been carried out with a group of 30 volunteers within an age bracket of 19-48 years. Each person performed six activities (WALKING, WALKINGUPSTAIRS, WALKINGDOWNSTAIRS, SITTING, STANDING, LAYING) wearing a smartphone (Samsung Galaxy S II) on the waist. Using its embedded accelerometer and gyroscope, we captured 3-axial linear acceleration and 3-axial angular velocity at a constant rate of 50Hz. The experiments have been video-recorded to label the data manually. The obtained dataset has been randomly partitioned into two sets, where 70% of the volunteers was selected for generating the training data and 30% the test data.
+
+The sensor signals (accelerometer and gyroscope) were pre-processed by applying noise filters and then sampled in fixed-width sliding windows of 2.56 sec and 50% overlap (128 readings/window). The sensor acceleration signal, which has gravitational and body motion components, was separated using a Butterworth low-pass filter into body acceleration and gravity. The gravitational force is assumed to have only low frequency components, therefore a filter with 0.3 Hz cutoff frequency was used. From each window, a vector of features was obtained by calculating variables from the time and frequency domain.
+
+A video of the experiment including an example of the 6 recorded activities with one of the participants can be seen in the following link: [Activity Recognition Experiment Using Smartphone Sensors](https://www.youtube.com/watch?v=XOEN9W05_4A)
+
+
+# 2. About dataset {.tabset .tabset-fade.tabset-pills}
+
+The Human Activity Recognition database was built from the recordings of 30 study participants performing activities of daily living (ADL) while carrying a waist-mounted smartphone with embedded inertial sensors. The objective is to classify activities into one of the six activities performed.
+
+## 2.1. X_Train
+```{r}
+x_train <- read.table("UCI HAR Dataset//train/X_train.txt")
+rmarkdown::paged_table(x_train)
+```
+## 2.2. Y_Train
+```{r}
+y_train <- read.table("UCI HAR Dataset//train/y_train.txt")%>%
+  rename(label = V1) %>% 
+  mutate(label = as.factor(label))
+rmarkdown::paged_table(y_train)
+```
+## 2.3. X_Test
+```{r}
+x_test <- read.table("UCI HAR Dataset//test/X_test.txt")
+rmarkdown::paged_table(x_test)
+```
+## 2.4. Y_Test
+```{r}
+y_test <- read.table("UCI HAR Dataset//test/y_test.txt")%>%
+  rename(label = V1) %>% 
+  mutate(label = as.factor(label))
+rmarkdown::paged_table(y_test)
+```
+## 2.5. Features
+```{r}
+feature <- read.table("UCI HAR Dataset/features.txt")
+rmarkdown::paged_table(feature)
+```
+## 2.6. Activity Labels
+```{r}
+actv_label <- read.table("UCI HAR Dataset//activity_labels.txt")
+rmarkdown::paged_table(actv_label)
+```
+
+# 3. Data Wrangling  {.tabset .tabset-fade.tabset-pills}
+
+## 3.1. Convert label function
+```{r}
+convert_lab <- function(y){ 
+    if(y == 1)
+      {
+      y <- "Walking" 
+    }
+    else 
+      if(y == 2)
+      {
+      y <- "Walking_upstairs"
+    }
+    else 
+      if(y == 3)
+      {
+      y <- "Walking_downstairs"
+    }
+    else 
+      if(y == 4)
+      {
+      y <- "Sitting"
+    }
+    else 
+      if(y == 5)
+      {
+      y <- "Standing"
+    }
+    else
+      {
+      y <- "Laying"
+    }  
+}
+```
+
+## 3.2. Train 
+```{r}
+# put colum name 
+colnames(x_train) <- feature$V2
+
+# change label target name
+y_train$label <- sapply(X = y_train$label,
+                     FUN = convert_lab)
+
+# put label target
+data_train <- data.frame(y_train, x_train) %>% 
+  mutate(label = as.factor(label))
+
+head(data_train)
+```
+
+## 3.3. Test
+```{r}
+# put colum name 
+colnames(x_test) <- feature$V2
+
+# change label target name
+y_test$label <- sapply(X = y_test$label,
+                     FUN = convert_lab)
+
+# put label target
+data_test <- data.frame(y_test, x_test) %>%
+  mutate(label = as.factor(label))
+
+head(data_test)
+```
+
+## 3.4. Missing value check
+```{r}
+anyNA(data_train)
+```
+
+
+# 4. Exploratory Data Analysis
+
+## 4.1. Static and Dynamic Activity
+Based on the common nature of activities we can broadly put them in two categories.
+
+Dynamic and Static activities :
+- WALKING, WALKING_DOWNSTAIRS, WALKING_UPSTAIRS can be considered as dynamic activities with significant amount of motion involved
+- SITTING, STANDING, LAYING can be considered as static activities with no motion involved
+
+Let's consider tBodyAccMag-mean() feature to differentiate among these two broader set of activities.
+
+```{r}
+ggplot(data=data_train, aes(x=tBodyAccMag.mean.., group=label, fill=label)) +
+  geom_density(adjust=1.5, alpha=.25) +
+  theme_light() +
+  labs(x= "tBodyAccMag.mean",
+       y = "Density",
+       fill = "Activity",
+       title = "Analysing tBodyAccMag-mean feature") +
+  geom_vline(xintercept = -0.5,
+             color = "red")
+```
+
+**Using density plot above we can easily come with a condition to separate static activities from dynamic activities, with a threshold value of -0.5 by looking at the tBodyAccMag.mean value it can separate static and dynamic activities very well.**
+
+## 4.2. Analysing Angle between X-axis and gravityMean feature
+
+```{r,message=FALSE,warning=FALSE}
+ggplot(data = data_train, aes(x = label, y = angle.X.gravityMean., fill=label)) +
+  geom_boxplot(alpha=0.3) +
+  theme_light() +
+  geom_hline(yintercept = 0,
+             color = "red") +
+  theme(
+    axis.text.x = element_blank(),
+    axis.title.x = element_blank(),
+    legend.title = element_text(colour = "steelblue", face = "bold.italic", family = "Helvetica", size = (15)),
+    legend.text = element_text(face = "italic", colour = "steelblue4", family = "Helvetica"),
+    axis.title = element_text(family = "Helvetica", size = (10), colour = "steelblue4")
+  ) +
+  labs(fill = "Activity",
+       title = "Box plot of angle(X,gravityMean) column across various activities",
+       y = "Angle between X-axis and gravityMean")
+```
+**From the boxplot we can observe that angle(X,gravityMean) perfectly seperates LAYING from other activities.**
+
+## 4.3. Check proportion label target
+```{r}
+label_prop <- data_train %>% 
+  group_by(label) %>% 
+  summarise(proportion = round(n()/nrow(data_train)*100,1))
+
+```
+
+```{r}
+ggplot(data = label_prop, aes(x = label, y = proportion, fill = label)) +
+  geom_col() +
+  geom_text(mapping = aes(label = proportion), color = "black", size = 3, nudge_y = 1) +
+  theme_light() +
+  theme(legend.position = "none") +
+  labs(x = "Activity",
+       title = "The Proportion of Every Label in Train Dataset",
+       y = "Proportion (%)")
+```
+**The proportion of each label in the target data is balanced, so there is no need for imbalance data treatment anymore**
+
+
+# 5. Naivebayes
+There are certain characteristics of Naive Bayes that should be considered:
+
+  - assumes that all features of the dataset are equally important and independent. This allows Naive Bayes to perform faster computation (the algorithms is quite simple).
+  - prone to bias due to data scarcity. In some cases, our data may have a distribution where scarce observations lead to probabilities approximating close to 0 or 1, which introduces a heavy bias into our model that could lead to poor performance on unseen data.
+  - more appropriate for data with categoric predictors. This is because Naive Bayes is sensitive to data scarcity. Meanwhile, a continuous variable might contain really scarce or even only one observation for certain value.
+  - apply Laplace estimator/smoothing for data scarcity problem. Laplace estimator proposes the adding of a small number (usually 1) to each of the counts in the frequency table. This subsequently ensures that each class-feature combination has a non-zero probability of occurring.
+  
+```{r}
+# model fitting
+model_nb <- naiveBayes(formula = label ~., data = data_train, laplace = 1)
+
+# prediction
+predict_nb <- as.factor(predict(model_nb,
+                      newdata = data_test,
+                      type = "class"))
+# performance evaluation - confusion matrix
+confusionMatrix(data = predict_nb,reference = data_test$label)
+```
+For your information these are the metrics to evaluate model performance:
+
+  - Accuracy: the ability to correctly predict both classes from the total observation.
+  - Precision: the ability to correctly predict the positive class from the total predicted-positive class (false positive is low).
+  - Recall: the ability to correctly predict the positive class from the total actual-positive class (false negative is low).
+  - Specificity: the ability to correctly predict the negative class from the total actual-negative class.
+
+Based on the result from confusion matrix, we only focus on the accuracy value because our target variable are balance and we only want the prediction results to be able to objectively predict the activity result.
+
+> By using Naive Bayes model, the Accuracy value is 76.99%. This value is good enough but maybe it can be better if we use another model that is more robust 
+
+# 6. Decission Tree
+```{r}
+# model fitting
+model_dt <- ctree(label ~., data = data_train,
+                  control = ctree_control(mincriterion = 0.97,
+                                          minsplit = 100,
+                                          minbucket = 50))
+# prediction to data_test
+predict_dt <- predict(object = model_dt,
+                      newdata = data_test,
+                      type = "response")
+# performance evaluation - confusion matrix
+confusionMatrix(data = predict_dt, reference = data_test$label)
+```
+
+```{r}
+# prediction to data train
+pred_dt_train <- predict(object = model_dt,
+                         newdata = data_train,
+                         type = "response")
+# performance evaluation - confusion matrix
+confusionMatrix(data = pred_dt_train,
+                reference = data_train$label)
+```
+> By using Naive Bayes model, the Accuracy value is 76.99%. This value is good enough but maybe it can be better if we use another model that is more robust 
+
+
+# 7. Random forest
+
+## 7.1. PCA
+
+```{r}
+data_train <- data_train[!duplicated(as.list(data_train))]
+data_test <- data_test[!duplicated(as.list(data_test))]
+```
+
+
+```{r}
+rec <- recipe(formula = label ~.,
+              data = data_train) %>% 
+  step_center(all_numeric()) %>% 
+  step_scale(all_numeric()) %>% 
+  step_pca(all_numeric(), threshold = 0.95) %>% 
+  prep()
+
+rec
+```
+
+```{r}
+train_rf <- juice(rec)
+head(train_rf)
+```
+
+```{r}
+test_rf <- bake(rec,
+                new_data = data_test)
+
+head(test_rf)
+```
+
+
+
+## 7.2. Modelling
+
+```{r}
+# set.seed(15)
+# 
+# control <- trainControl(method = "repeatedcv",
+#                         number = 6,
+#                         repeats = 3)
+# model_rf <- train(label ~.,
+#                   data = train_rf,
+#                   method = "rf",
+#                   trainControl = control)
+# 
+# saveRDS(model_rf, "random_forest.RDS")
+```
+
+
+```{r}
+model_rf_fix <-  readRDS("random_forest.RDS")
+
+#lihat hasil model
+model_rf_fix$finalModel
+```
+
+```{r}
+pred_model_rf <- predict(object = model_rf_fix,
+                         newdata = test_rf)
+
+confusionMatrix(pred_model_rf, test_rf$label)
+```
+> By using Random Forest model, the Accuracy value is 91.04%. This value is really good and really better than two model before
+
+
+# Conclusion
+
+```{r}
+
+naive_table <-  dplyr::select(data_test, label) %>%
+  bind_cols(label_pred = predict_nb) %>% 
+  summarise(accuracy = accuracy_vec(label, label_pred))
+
+decision_table <- dplyr::select(data_test, label) %>% 
+  bind_cols(label_pred = predict_dt) %>% 
+  summarise(accuracy = accuracy_vec(label, label_pred))
+
+random_table <- dplyr::select(test_rf, label) %>% 
+  bind_cols(label_pred = pred_model_rf) %>% 
+  summarise(accuracy = accuracy_vec(label, label_pred))
+
+
+rbind("Naive Bayes" = naive_table, 
+      "Decision Tree" = decision_table,
+      "Random Forest" = random_table)
+```
+
+> Based on the metrics table above, the predictive model built using Random Forest algorithm gave the best result. The model gave highest accuracy 91%. Therefore the best model to predict human activity based accelerometer and gyroscope sensor signal is the **Random Forest model**.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  
+
+
